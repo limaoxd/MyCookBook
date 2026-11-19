@@ -5,8 +5,8 @@
  * 留空 = 只在本機運作，並顯示示範食譜
  * ========================================================= */
 
-const CLOUD = { projectId: '', apiKey: '' };
-//const CLOUD = { projectId: 'mycookbook-13356', apiKey: 'AIzaSyCFRgS08zBz45Ho_DekodxFl7g_DfiwPXE' };
+//const CLOUD = { projectId: '', apiKey: '' };
+const CLOUD = { projectId: 'mycookbook-13356', apiKey: 'AIzaSyCFRgS08zBz45Ho_DekodxFl7g_DfiwPXE' };
 const CLOUD_ON = !!(CLOUD.projectId && CLOUD.apiKey);
 
 const UNITS = ['克', '公斤', '毫升', '公升', '杯', '大匙', '小匙', '匙', '個', '顆', '片', '段', '瓣', '條', '適量'];
@@ -18,8 +18,8 @@ const CAT_NAME = { ...Object.fromEntries(CATS), other: '其他' };
 // 比對順序很重要：越前面越優先（例如「雞湯」要算湯、「醬油」要算醬類、「米酒」要算調味）
 const MATCH_ORDER = ['soup', 'sauce', 'season', 'mushroom', 'fruit', 'starch', 'meat', 'veg'];
 const KEYWORDS = {
-  soup: ['湯', '火鍋'],
-  sauce: ['醬', '蠔油', '味噌', '豆瓣', '沙茶', '咖哩', '辣油', '麻油', '香油', '醋', '美乃滋', '蜂蜜'],
+  soup: ['湯', '火鍋', '水'],
+  sauce: ['醬', '蠔油', '露', '味噌', '豆瓣', '沙茶', '咖哩', '辣油', '麻油', '香油', '醋', '美乃滋', '蜂蜜'],
   season: ['鹽', '糖', '胡椒', '花椒', '味精', '雞粉', '太白粉', '辣椒粉', '孜然', '香料', '奶油', '起司', '牛奶', '鮮奶', '酒', '油'],
   mushroom: ['菇', '木耳', '蕈'],
   fruit: ['水果', '蘋果', '香蕉', '檸檬', '柳橙', '橙', '莓', '芒果', '鳳梨', '葡萄', '梨', '桃', '西瓜', '柚', '柑', '奇異果', '酪梨', '椰', '荔枝', '龍眼', '木瓜', '櫻桃'],
@@ -93,6 +93,7 @@ const ICONS = {
   dice: '<rect x="4" y="4" width="16" height="16" rx="4.5"/><g fill="currentColor" stroke="none"><circle cx="9" cy="9" r="1.2"/><circle cx="15" cy="9" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="9" cy="15" r="1.2"/><circle cx="15" cy="15" r="1.2"/></g>',
   image: '<rect x="3.5" y="5" width="17" height="14" rx="3"/><circle cx="9" cy="10.2" r="1.6"/><path d="M4 17l5-4.5 3.5 3 3-2.5 4.5 4"/>',
   download: '<path d="M12 4v11M7.5 11l4.5 4.5 4.5-4.5M5 20h14"/>',
+  grip: '<path stroke-width="3" d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
 };
 const SVG_NS = 'http://www.w3.org/2000/svg';
 function svgEl(inner, { size, sw, fill = false }) {
@@ -234,7 +235,7 @@ async function photoFromFile(file) {
  *   extraTags: [string],
  *   tags: [string],                 // = 食材名稱 + extraTags（搜尋用）
  *   cover: null | {type:'icon', id} | {type:'photo', data},
- *   steps: [{ text, timer: bool, seconds: number }]
+ *   steps: [{ text, timer: bool, seconds: number, optional: bool }]  // optional：選填步驟，灰底、沒有計時、做菜時上下移動會跳過
  * }
  */
 function computeTags(r) {
@@ -257,7 +258,7 @@ function normalize(r) {
       .filter((i) => i.name),
     extraTags: (r.extraTags || []).map((t) => String(t).trim().slice(0, 20)).filter(Boolean),
     steps: (r.steps || [])
-      .map((s) => ({ text: String(s.text || '').trim().slice(0, 500), timer: !!s.timer, seconds: Math.max(1, Math.min(86400, Number(s.seconds) || 60)) }))
+      .map((s) => ({ text: String(s.text || '').trim().slice(0, 500), optional: !!s.optional, timer: !!s.timer && !s.optional, seconds: Math.max(1, Math.min(86400, Number(s.seconds) || 60)) }))
       .filter((s) => s.text),
   };
   out.tags = computeTags(out);
@@ -330,6 +331,7 @@ const SEED = [
       { text: '蛋白煎熟，分小份盛起', timer: true, seconds: 45 },
       { text: '蛋黃炒熟，盛起備用', timer: true, seconds: 30 },
       { text: '轉中火爆香蒜頭和蔥', timer: true, seconds: 20 },
+      { text: '喜歡吃辣的話，可以加一點辣椒碎', optional: true },
       { text: '加入火腿丁炒香', timer: true, seconds: 60 },
       { text: '轉大火，加入白飯與蛋黃，拌炒均勻，加鹽調味', timer: true, seconds: 120 },
     ],
@@ -704,7 +706,15 @@ function startCook(recipe) {
   closeCook();
   const steps = recipe.steps;
   const root = $('#page-cook');
-  let cur = 0;
+  // 選填步驟：上下移動時不會被選到（除非整份食譜都是選填）
+  const hasReq = steps.some((s) => !s.optional);
+  const skip = (i) => hasReq && steps[i].optional;
+  const nextReq = (i, dir) => {
+    let j = i + dir;
+    while (j >= 0 && j < steps.length && skip(j)) j += dir;
+    return j >= 0 && j < steps.length ? j : -1;
+  };
+  let cur = skip(0) ? nextReq(0, 1) : 0;
   let ticker = null;
   let wakeLock = null;
   let suppress = false;
@@ -731,8 +741,9 @@ function startCook(recipe) {
       r.box = h('div', { class: 'tbox', role: 'button', tabindex: 0, 'aria-label': '開始或暫停計時', onclick: (e) => { e.stopPropagation(); toggleT(i); } }, r.fill, r.ico, r.time, r.reset);
       box = r.box;
     }
-    r.node = h('div', { class: 'node', onclick: () => setCur(i) }, h('div', { class: 'ntext' }, s.text), box);
-    r.el = timelineRow(r.node);
+    r.node = h('div', { class: 'node' + (s.optional ? ' optional' : ''), onclick: () => { if (!skip(i)) setCur(i); } },
+      h('div', { class: 'ntext' }, s.text), s.optional ? h('span', { class: 'optag' }, '選填') : box);
+    r.el = timelineRow(r.node, s.optional ? 'opt' : '');
     return r;
   });
 
@@ -751,8 +762,19 @@ function startCook(recipe) {
   function setCur(i, scroll = true) {
     cur = clamp(i);
     rows.forEach((r, k) => { r.el.classList.toggle('current', k === cur); r.el.classList.toggle('done', k < cur); });
-    prog.textContent = `${cur + 1} / ${steps.length}`;
+    // 進度只算必做步驟
+    prog.textContent = hasReq
+      ? `${steps.slice(0, cur + 1).filter((s) => !s.optional).length} / ${steps.filter((s) => !s.optional).length}`
+      : `${cur + 1} / ${steps.length}`;
     if (scroll) rows[cur].el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  // 往上 / 往下移動：依方向跳到下一個（或前一個）必做步驟；沒有可去的就不動
+  function stepBy(dir) {
+    const j = nextReq(cur, dir);
+    if (j < 0) return false;
+    setCur(j);
+    return true;
   }
 
   /* ----- 計時（每個步驟獨立，可同時進行） ----- */
@@ -782,7 +804,7 @@ function startCook(recipe) {
   function onDone(i) {
     alarm();
     if (cur === i) {
-      if (i < steps.length - 1) setTimeout(() => { if (cur === i) setCur(i + 1); }, 1200);
+      if (nextReq(i, 1) >= 0) setTimeout(() => { if (cur === i) stepBy(1); }, 1200);
       else toast('全部完成，開動');
     } else toast(`步驟 ${i + 1} 計時結束`);
   }
@@ -801,7 +823,7 @@ function startCook(recipe) {
   root.hidden = false;
   paintSave();
   rows.forEach((_, i) => paintT(i));
-  setCur(0, false);
+  setCur(cur, false);
   scroller.scrollTop = 0;
 
   /* ----- 滑鼠拖曳捲動（手機用拇指原生滑動） ----- */
@@ -835,19 +857,15 @@ function startCook(recipe) {
     // 如果已經在冷卻中，或是滾動幅度太小，就略過
     if (wheelTimeout || Math.abs(e.deltaY) < 3) return;
 
-    if (e.deltaY > 0 && cur < steps.length - 1) {
-      setCur(cur + 1);
+    if (stepBy(e.deltaY > 0 ? 1 : -1)) {
       wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 120); // 冷卻時間
-    } else if (e.deltaY < 0 && cur > 0) {
-      setCur(cur - 1);
-      wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 120);
     }
   }, { passive: false });
 
   /* ----- 鍵盤：↑ ↓ 換步驟、空白鍵計時、Esc 離開 ----- */
   const onKey = (e) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); setCur(cur + 1); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setCur(cur - 1); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); stepBy(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); stepBy(-1); }
     else if (e.key === ' ') { e.preventDefault(); toggleT(cur); }
     else if (e.key === 'Escape') closeCook();
   };
@@ -860,6 +878,84 @@ function startCook(recipe) {
     document.removeEventListener('keydown', onKey);
     if (wakeLock) wakeLock.release().catch(() => {});
   };
+}
+
+/* =========================================================
+ * 拖曳排序：只有「把手」可以拖，所以不影響輸入文字與頁面捲動
+ *   mode 'y'    ：單欄直排（步驟）
+ *   mode 'flow' ：會換行的一排（備料標籤）
+ * 放開後呼叫 onDrop(order)，order[新位置] = 原本的位置
+ * ========================================================= */
+function enableSort({ container, itemSel, handleSel, mode, getScroller, onDrop }) {
+  container.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest(handleSel);
+    if (!handle || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    const item = handle.closest(itemSel);
+    if (!item || !container.contains(item)) return;
+    e.preventDefault();
+
+    const list = () => [...container.querySelectorAll(':scope > ' + itemSel)];
+    const original = list();
+    const r0 = item.getBoundingClientRect();
+    const grab = { x: e.clientX - r0.left, y: e.clientY - r0.top }; // 抓住項目的哪個位置
+    let px = e.clientX; let py = e.clientY;
+    let raf = 0;
+    item.classList.add('sorting');
+    document.body.style.userSelect = 'none';
+
+    const layout = () => {
+      // 項目「視覺上」的中心點；越過別的項目的中心，就跟它換位置
+      const vcx = px - grab.x + r0.width / 2;
+      const vcy = py - grab.y + r0.height / 2;
+      const others = list().filter((x) => x !== item);
+      const passed = (o) => {
+        const r = o.getBoundingClientRect();
+        if (mode === 'y') return vcy > r.top + r.height / 2;
+        return vcy > r.bottom || (vcy >= r.top && vcx > r.left + r.width / 2);
+      };
+      const target = others.filter(passed).length;
+      if (others.length && target !== list().indexOf(item)) {
+        if (target >= others.length) others[others.length - 1].after(item); else others[target].before(item);
+      }
+      // 先量出它「在版面上的位置」，再用位移讓它跟著手指走
+      item.style.transform = '';
+      const nat = item.getBoundingClientRect();
+      const dx = mode === 'y' ? 0 : px - grab.x - nat.left;
+      item.style.transform = `translate(${dx}px, ${py - grab.y - nat.top}px)`;
+    };
+
+    // 每一格畫面都更新，並在靠近上下邊緣時自動捲動
+    const frame = () => {
+      const sc = getScroller && getScroller();
+      if (sc) {
+        const b = sc.getBoundingClientRect();
+        const edge = 72;
+        if (py < b.top + edge) sc.scrollTop -= Math.min(16, (b.top + edge - py) / 4 + 2);
+        else if (py > b.bottom - edge) sc.scrollTop += Math.min(16, (py - (b.bottom - edge)) / 4 + 2);
+      }
+      layout();
+      raf = requestAnimationFrame(frame);
+    };
+
+    const move = (ev) => { if (ev.pointerId === e.pointerId) { px = ev.clientX; py = ev.clientY; } };
+    const end = (ev) => {
+      if (ev.pointerId !== e.pointerId) return;
+      cancelAnimationFrame(raf);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      document.body.style.userSelect = '';
+      item.classList.remove('sorting');
+      item.style.transform = '';
+      const order = list().map((el) => original.indexOf(el));
+      if (order.some((v, k) => v !== k)) onDrop(order);
+    };
+    // 項目在拖曳中會被搬動位置，所以監聽 window，不依賴 pointer capture
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    frame();
+  });
 }
 
 /* =========================================================
@@ -927,7 +1023,8 @@ function buildEditor() {
   function drawIngs(focusLast) {
     ingBox.replaceChildren(
       ...d.ingredients.map((ing, i) => {
-        const pill = h('div', { class: 'pill c-' + catOf(ing.name.trim().toLowerCase()) },
+        const pill = h('div', { class: 'pill c-' + catOf(ing.name.trim().toLowerCase()), 'data-i': i },
+          h('button', { class: 'grip', 'aria-label': '拖曳排序', tabindex: -1 }, icon('grip', { size: 16 })),
           h('input', { class: 'pn', type: 'text', placeholder: '食材', maxlength: 30, value: ing.name, oninput: (e) => {
             ing.name = e.target.value; touch();
             pill.className = 'pill c-' + catOf(ing.name.trim().toLowerCase());
@@ -986,6 +1083,13 @@ function buildEditor() {
       const ta = h('textarea', { rows: 1, placeholder: '這一步要做什麼…', maxlength: 500, value: s.text,
         oninput: (e) => { s.text = e.target.value; fit(e.target); touch(); } });
       const acts = h('div', { class: 'nacts' },
+        h('button', { class: 'grip', 'aria-label': '拖曳排序', tabindex: -1 }, icon('grip', { size: 18 })),
+        h('span', { class: 'nsp' }),
+        h('button', { class: 'opt-btn' + (s.optional ? ' on' : ''), 'aria-pressed': String(!!s.optional), onclick: (e) => {
+          e.stopPropagation();
+          s.optional = !s.optional; if (s.optional) s.timer = false; // 選填步驟沒有計時
+          touch(); drawSteps();
+        } }, '選填'),
         h('button', { 'aria-label': '上移', disabled: i === 0, onclick: (e) => { e.stopPropagation(); move(i, -1); } }, icon('up', { size: 18 })),
         h('button', { 'aria-label': '下移', disabled: i === d.steps.length - 1, onclick: (e) => { e.stopPropagation(); move(i, 1); } }, icon('down', { size: 18 })),
         h('button', { 'aria-label': '刪除步驟', onclick: (e) => {
@@ -993,9 +1097,11 @@ function buildEditor() {
           d.steps.splice(i, 1); if (!d.steps.length) d.steps.push({ text: '', timer: false, seconds: 60 });
           d.cur = Math.min(d.cur, d.steps.length - 1); touch(); drawSteps();
         } }, icon('trash', { size: 17 })));
-      const node = h('div', { class: 'node edit', onfocusin: () => { d.cur = i; paintCur(); }, onclick: (e) => { if (!e.target.closest('.tbox')) ta.focus(); } },
-        h('div', { class: 'nmain' }, ta, acts), editTimer(s));
-      return timelineRow(node);
+      const node = h('div', { class: 'node edit' + (s.optional ? ' optional' : ''), onfocusin: () => { d.cur = i; paintCur(); }, onclick: (e) => { if (!e.target.closest('.tbox,.nacts')) ta.focus(); } },
+        h('div', { class: 'nmain' }, ta, acts), s.optional ? null : editTimer(s));
+      const row = timelineRow(node, s.optional ? 'opt' : '');
+      row.dataset.i = i;
+      return row;
     });
     const addRow = timelineRow(
       h('button', { class: 'node', onclick: () => { d.steps.push({ text: '', timer: false, seconds: 60 }); d.cur = d.steps.length - 1; touch(); drawSteps(d.cur); } },
@@ -1060,6 +1166,18 @@ function buildEditor() {
   drawIngs();
   drawSteps();
   paintCover();
+
+  /* ----- 拖曳排序：備料標籤、步驟 ----- */
+  const getScroller = () => $('.scroll', page);
+  enableSort({ container: ingBox, itemSel: '.pill[data-i]', handleSel: '.grip', mode: 'flow', getScroller,
+    onDrop: (order) => { d.ingredients = order.map((k) => d.ingredients[k]); touch(); drawIngs(); } });
+  enableSort({ container: tl, itemSel: '.trow[data-i]', handleSel: '.grip', mode: 'y', getScroller,
+    onDrop: (order) => {
+      const curStep = d.steps[d.cur];
+      d.steps = order.map((k) => d.steps[k]);
+      d.cur = Math.max(0, d.steps.indexOf(curStep));
+      touch(); drawSteps();
+    } });
 }
 
 /* ---------- 啟動 ---------- */
